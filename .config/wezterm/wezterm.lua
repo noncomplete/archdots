@@ -2,14 +2,14 @@
 -- noncomplete's wezterm configuration
 --
 local wezterm = require("wezterm")
-local mux = wezterm.mux
+--local mux = wezterm.mux
 local config = {}
 
-wezterm.on("gui-startup", function(cmd)
-	local _, _, window = mux.spawn_window(cmd or {})
-	window:gui_window():maximize()
-	--pane:split({ size = 0.2 })
-end)
+--wezterm.on("gui-startup", function(cmd)
+--	local _, _, window = mux.spawn_window(cmd or {})
+--	window:gui_window():maximize()
+----pane:split({ size = 0.2 })
+--end)
 
 wezterm.on("user-var-changed", function(window, pane, name, value)
 	local overrides = window:get_config_overrides() or {}
@@ -43,10 +43,12 @@ config.default_prog = { "/usr/bin/fish", "-l" }
 config.font = wezterm.font("ZedMono Nerd Font", { weight = "Medium", italic = false })
 config.font_size = 11
 config.color_scheme = "Noctalia"
---config.color_scheme = 'Grayscale Dark (base16)'
---config.colors = { background = "#101010", cursor_bg = "#00AFFF", cursor_fg = "#000000" }
-config.colors = { background = "#000000", cursor_bg = "#00AADD", cursor_fg = "#000000" }
-config.window_background_opacity = 0.90
+config.colors = { 
+--	background = "#101010", 
+	cursor_bg = "#00AFFF", 
+	cursor_fg = "#000000" 
+}
+config.window_background_opacity = 0.85
 config.hide_mouse_cursor_when_typing = false
 --config.cursor_blink_rate = 100
 --config.cursor_blink_ease_in = "Constant"
@@ -58,5 +60,6 @@ config.inactive_pane_hsb = {
 -- Tab bar config
 config.enable_tab_bar = false
 config.use_fancy_tab_bar = true
+config.window_decorations = "NONE"
 
 return config

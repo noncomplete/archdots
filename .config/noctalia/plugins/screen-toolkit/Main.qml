@@ -1,97 +1,280 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
+import qs.Widgets
 import qs.Services.UI
-
+import qs.Services.Compositor
+import "overlays"
+import "widgets"
+import "utils/utils.js" as U
+import "tools"
 Item {
     id: root
-
     property var pluginApi: null
-
-    property bool isRunning: false
-    property string activeTool: ""
-    property string pendingLangStr: "eng"
-    property string pendingRecordFormat: "gif"
-    property bool pendingRecordAudioOut: false
-    property bool pendingRecordAudioIn: false
-    property bool pendingRecordCursor: false
-    property string pendingTool: ""
-
-    // ── Sync state to pluginSettings so Panel can read without mainInstance ──
-    onIsRunningChanged:   _syncState()
-    onActiveToolChanged:  _syncState()
-
-    function _syncState() {
-        if (!pluginApi) return
-        pluginApi.pluginSettings.stateIsRunning   = root.isRunning
-        pluginApi.pluginSettings.stateActiveTool  = root.activeTool
-        pluginApi.pluginSettings.stateMirrorVisible = root.mirrorVisible
-        pluginApi.saveSettings()
-    }
-
-    // ── Settings shortcuts ────────────────────────────────────
-    readonly property string selectedOcrLang: pluginApi?.pluginSettings?.selectedOcrLang || "eng"
-
-    // ── Region selector state (replaces slurp) ────────────────
-    // Stores the confirmed region from RegionSelector for dispatch to tools.
-    property int _regionX: 0
-    property int _regionY: 0
-    property int _regionW: 0
-    property int _regionH: 0
-    property var _regionScreen: null
-
-    // ── Capability detection ──────────────────────────────────
-    property bool _capsDetected: false
-    property var _detectedLangs: []
-
+    readonly property string _scriptsDir: Qt.resolvedUrl("scripts/").toString().replace("file://", "")
+    readonly property string _home: Quickshell.env("HOME")
+    property bool   isRunning:              false
+    property string activeTool:             ""
+    property string pendingLangStr:         "eng"
+    property string pendingRecordFormat:    "gif"
+    property bool   pendingRecordAudioOut:  false
+    property bool   pendingRecordAudioIn:   false
+    property bool   pendingRecordCursor:    false
+    property string pendingTool:            ""
+    property var    installedLangs:         []
+    property bool   transAvailable:         false
+    property string detectedRecorder:       ""
+    readonly property string detectedCompositor: CompositorService.isHyprland ? "hyprland"
+                                                 : CompositorService.isNiri   ? "niri" : "other"
+    readonly property bool isNiri:     CompositorService.isNiri
+    readonly property bool isHyprland: CompositorService.isHyprland
+    readonly property string resultHex:        colorPickerOverlay.resultHex
+    readonly property string resultRgb:        colorPickerOverlay.resultRgb
+    readonly property string resultHsv:        colorPickerOverlay.resultHsv
+    readonly property string resultHsl:        colorPickerOverlay.resultHsl
+    readonly property string colorCapturePath: colorPickerOverlay.colorCapturePath
+    readonly property int    colorCacheBust:   colorPickerOverlay.colorCacheBust
+    readonly property var    colorHistory:     colorPickerOverlay.colorHistory
+    readonly property string ocrResult:        ocrOverlay.ocrResult
+    readonly property string ocrCapturePath:   ocrOverlay.ocrCapturePath
+    readonly property string translateResult:  ocrOverlay.translateResult
+    readonly property string qrResult:         qrOverlay.qrResult
+    readonly property string qrCapturePath:    qrOverlay.qrCapturePath
+    readonly property var    paletteColors:    paletteOverlay.paletteColors
+    readonly property string recordState:  recordOverlay?.recordState  ?? ""
+    readonly property string recordFormat: recordOverlay?.format       ?? "gif"
+    readonly property string recordPath:   recordOverlay?.gifPath      ?? ""
+    readonly property bool   mirrorVisible: mirrorOverlay.isVisible
+    readonly property bool   hasPins:       pinOverlay.hasPins
+    readonly property var mainInstance: pluginApi?.mainInstance ?? null
+    property int    _regionX:      0
+    property int    _regionY:      0
+    property int    _regionW:      0
+    property int    _regionH:      0
+    property var    _regionScreen: null
+    property bool   _capsDetected:   false
+    property bool   _sessionChecked: false
+    property var    _detectedLangs:  []
+    property string _grimGeometry: ""
+    property int    _grimX:        0
+    property int    _grimY:        0
+    property int    _grimW:        0
+    property int    _grimH:        0
+    property int    _grimLocalX:   0
+    property int    _grimLocalY:   0
     Component.onCompleted: {
-        // Reset any stale running state from previous sessions
-        root.isRunning = false
+        root.isRunning  = false
         root.activeTool = ""
+        Logger.i("ScreenToolkit", "Scripts dir: " + root._scriptsDir)
         if (!_capsDetected) {
-            _capsDetected = true
             detectCapabilities()
+            _capsDetected = true
         }
     }
-
     onPluginApiChanged: {
         if (pluginApi) {
-            // Clear stale state that may have persisted across restarts
-            pluginApi.pluginSettings.stateIsRunning  = false
-            pluginApi.pluginSettings.stateActiveTool = ""
-            pluginApi.saveSettings()
+            if (!root._sessionChecked) {
+                root._sessionChecked = true
+                _checkSession()
+            }
         }
     }
-
-    // ── Bash helpers ──────────────────────────────────────────
-    // Builds a grim command. RegionSelector emits screen-local physical pixels;
-    // grim -g expects global logical coordinates (same space as slurp output).
-    // We divide by devicePixelRatio and add the screen's global offset.
-
-    function _grimRegionCmd(outFile) {
-        var scale = root._regionScreen?.devicePixelRatio ?? 1.0
-        var sx    = root._regionScreen?.x ?? 0
-        var sy    = root._regionScreen?.y ?? 0
-        var gx = sx + Math.round(root._regionX / scale)
-        var gy = sy + Math.round(root._regionY / scale)
-        var gw = Math.round(root._regionW / scale)
-        var gh = Math.round(root._regionH / scale)
-        return "grim -g \"" + gx + "," + gy + " " + gw + "x" + gh + "\" " +
-               outFile + " 2>/dev/null"
+    Process {
+        id: sessionCheckProc
+        stdout: StdioCollector {}
+        onExited: {
+            var isNewBoot = sessionCheckProc.stdout.text.trim() === "new"
+            if (isNewBoot) _clearStaleResults()
+            else           _restoreSavedState()
+        }
     }
-
-    // ── Generic region-tool launcher ─────────────────────────
-    // Shows the QML region selector overlay. Panel.qml / IPC API unchanged.
-    function _runSlurpTool(tool) {
-        if (root.isRunning) return
-        root.pendingTool = tool
-        root.isRunning = true
-        closeThenLaunch(launchRegionSelector)
+    function _checkSession() {
+        sessionCheckProc.exec({ command: ["bash", "-c",
+            "[ -f /tmp/screen-toolkit-session ] && echo 'exists' || echo 'new'; " +
+            "touch /tmp/screen-toolkit-session"
+        ]})
     }
-
-    // ── Processes ─────────────────────────────────────────────
-
+    function _clearStaleResults() {
+        if (!pluginApi) return
+        var s = pluginApi.pluginSettings
+        s.resultHex        = ""; s.resultRgb        = ""
+        s.resultHsv        = ""; s.resultHsl        = ""
+        s.colorCapturePath = ""; s.colorCacheBust   = 0
+        s.ocrResult        = ""; s.ocrCapturePath   = ""
+        s.qrResult         = ""; s.qrCapturePath    = ""
+        s.paletteColors    = ""; s.translateResult  = ""
+        pluginApi.saveSettings()
+        colorPickerOverlay.clearResults()
+        ocrOverlay.clearResults()
+        qrOverlay.clearResults()
+        paletteOverlay.clearResults()
+        colorPickerOverlay.colorHistory = pluginApi.pluginSettings.colorHistory || []
+    }
+    function clearColorResult() {
+    colorPickerOverlay.clearResults()
+    if (pluginApi) {
+        pluginApi.pluginSettings.resultHex        = ""
+        pluginApi.pluginSettings.resultRgb        = ""
+        pluginApi.pluginSettings.resultHsv        = ""
+        pluginApi.pluginSettings.resultHsl        = ""
+        pluginApi.pluginSettings.colorCapturePath = ""
+        pluginApi.pluginSettings.colorCacheBust   = 0
+        pluginApi.saveSettings()
+    }
+}
+function clearColorHistory() {
+    colorPickerOverlay.colorHistory = []
+    if (pluginApi) { pluginApi.pluginSettings.colorHistory = []; pluginApi.saveSettings() }
+}
+function clearOcrResult() {
+    ocrOverlay.clearResults()
+    if (pluginApi) {
+        pluginApi.pluginSettings.ocrResult      = ""
+        pluginApi.pluginSettings.ocrCapturePath = ""
+        pluginApi.saveSettings()
+    }
+}
+function clearQrResult() {
+    qrOverlay.clearResults()
+    if (pluginApi) {
+        pluginApi.pluginSettings.qrResult      = ""
+        pluginApi.pluginSettings.qrCapturePath = ""
+        pluginApi.saveSettings()
+    }
+}
+function clearPaletteResult() {
+    paletteOverlay.clearResults()
+    if (pluginApi) { pluginApi.pluginSettings.paletteColors = []; pluginApi.saveSettings() }
+}
+    function _restoreSavedState() {
+        if (!pluginApi) return
+        var s = pluginApi.pluginSettings
+        colorPickerOverlay.loadState(s)
+        ocrOverlay.loadState(s)
+        qrOverlay.loadState(s)
+        paletteOverlay.loadState(s)
+        colorPickerOverlay.colorHistory = s.colorHistory || []
+    }
+    Connections {
+        target: recordOverlay
+        function onRecordStateChanged() {
+            if (!pluginApi) return
+            var skipConfirm = pluginApi.pluginSettings?.recordSkipConfirmation ?? false
+            var toClipboard = pluginApi.pluginSettings?.recordCopyToClipboard  ?? false
+            if (recordOverlay.recordState === "converting" && !skipConfirm && !toClipboard) {
+                var screen = recordOverlay._primaryScreen
+                if (screen) pluginApi.openPanel(screen)
+                else pluginApi.withCurrentScreen(sc => pluginApi.openPanel(sc))
+            }
+        }
+        function onDismissed() {
+            if (root.activeTool === "record") root.activeTool = ""
+        }
+    }
+    Connections {
+        target: colorPickerOverlay
+        function onDone() {
+            root.isRunning  = false
+            root.activeTool = "colorpicker"
+            pluginApi?.withCurrentScreen(screen => pluginApi.openPanel(screen))
+        }
+        function onFailed() {
+            root.isRunning  = false
+            root.activeTool = ""
+            ToastService.showError(pluginApi?.tr("messages.picker-cancelled"))
+        }
+    }
+    Connections {
+        target: ocrOverlay
+        function onDone() {
+            root.isRunning  = false
+            root.activeTool = "ocr"
+            pluginApi?.withCurrentScreen(screen => pluginApi.openPanel(screen))
+        }
+        function onFailed(messageKey, messageArg) {
+            root.isRunning  = false
+            root.activeTool = ""
+            var template = pluginApi?.tr(messageKey)
+            var msg = messageArg !== "" ? template.replace("{dep}", messageArg) : template
+            ToastService.showError(msg)
+        }
+    }
+    Connections {
+        target: qrOverlay
+        function onDone() {
+            root.isRunning  = false
+            root.activeTool = "qr"
+            pluginApi?.withCurrentScreen(screen => pluginApi.openPanel(screen))
+        }
+        function onFailed() {
+            root.isRunning  = false
+            root.activeTool = ""
+            ToastService.showError(pluginApi?.tr("messages.no-qr"))
+        }
+    }
+    Connections {
+        target: lensOverlay
+        function onDone() {
+            root.isRunning  = false
+            root.activeTool = ""
+        }
+        function onFailed(messageKey, messageArg) {
+            root.isRunning  = false
+            root.activeTool = ""
+            var template = pluginApi?.tr(messageKey)
+            var msg = messageArg !== "" ? template.replace("{dep}", messageArg) : template
+            ToastService.showError(msg)
+        }
+    }
+    Connections {
+        target: paletteOverlay
+        function onDone() {
+            root.isRunning  = false
+            root.activeTool = "palette"
+            pluginApi?.withCurrentScreen(screen => pluginApi.openPanel(screen))
+        }
+        function onFailed() {
+            root.isRunning  = false
+            root.activeTool = ""
+            ToastService.showError(pluginApi?.tr("messages.palette-failed"))
+        }
+    }
+    RegionSelector {
+        id: regionSelector
+        pluginApi: root.pluginApi
+        onRegionSelected: (x, y, w, h, screen) => {
+            root._regionX      = x; root._regionY = y
+            root._regionW      = w; root._regionH = h
+            root._regionScreen = screen
+            var scale          = screen?.devicePixelRatio ?? 1.0
+            var sx             = screen?.x ?? 0
+            var sy             = screen?.y ?? 0
+            root._grimX        = sx + Math.round(x / scale)
+            root._grimY        = sy + Math.round(y / scale)
+            root._grimW        = Math.round(w / scale)
+            root._grimH        = Math.round(h / scale)
+            root._grimLocalX   = Math.round(x / scale)
+            root._grimLocalY   = Math.round(y / scale)
+            root._grimGeometry = root._grimX + "," + root._grimY + " " + root._grimW + "x" + root._grimH
+            _dispatchPendingTool()
+        }
+        onCancelled: {
+            root.isRunning  = false
+            root.activeTool = ""
+        }
+    }
+    Annotate      { id: annotateOverlay;      mainInstance: root }
+    Measure       { id: measureOverlay;       mainInstance: root }
+    Pin           { id: pinOverlay;           pluginApi: root.pluginApi }
+    Record        { id: recordOverlay;        pluginApi: root.pluginApi }
+    Mirror { id: mirrorOverlay; pluginApi: root.pluginApi; scriptsDir: root._scriptsDir }
+    ColorPicker   { id: colorPickerOverlay;   pluginApi: root.pluginApi; scriptsDir: root._scriptsDir }
+    Ocr           { id: ocrOverlay;           pluginApi: root.pluginApi; scriptsDir: root._scriptsDir }
+    Qr            { id: qrOverlay;            pluginApi: root.pluginApi; scriptsDir: root._scriptsDir }
+    Lens          { id: lensOverlay;          pluginApi: root.pluginApi; scriptsDir: root._scriptsDir }
+    Palette       { id: paletteOverlay;       pluginApi: root.pluginApi; scriptsDir: root._scriptsDir }
     Process {
         id: detectLangsProc
         stdout: StdioCollector {}
@@ -108,9 +291,10 @@ Item {
                 pluginApi.pluginSettings.installedLangs = root._detectedLangs.slice()
                 pluginApi.saveSettings()
             }
+            if (root._detectedLangs.length > 0)
+                root.installedLangs = root._detectedLangs.slice()
         }
     }
-
     Process {
         id: detectTransProc
         stdout: StdioCollector {}
@@ -120,9 +304,9 @@ Item {
                 pluginApi.pluginSettings.transAvailable = path !== "" && path.startsWith("/")
                 pluginApi.saveSettings()
             }
+            root.transAvailable = path !== "" && path.startsWith("/")
         }
     }
-
     Process {
         id: detectRecorderProc
         stdout: StdioCollector {}
@@ -134,166 +318,86 @@ Item {
                     path.endsWith("wf-recorder")  ? "wf-recorder"  : ""
                 pluginApi.saveSettings()
             }
+            root.detectedRecorder =
+                path.endsWith("wl-screenrec") ? "wl-screenrec" :
+                path.endsWith("wf-recorder")  ? "wf-recorder"  : ""
         }
     }
-
-    Process {
-        id: colorPickerProc
-        stdout: StdioCollector {}
-        onExited: (code) => {
-            root.isRunning = false
-            if (code !== 0 || colorPickerProc.stdout.text.trim() === "") {
-                root.activeTool = ""
-                ToastService.showError(pluginApi.tr("messages.picker-cancelled"))
-                return
-            }
-            var line  = colorPickerProc.stdout.text.trim()
-            var parts = line.split("|")
-            var hex   = parts[0]
-            var capturePath = parts.length > 1 ? parts[1] : ""
-            if (hex.length !== 7 || hex.charAt(0) !== "#") {
-                root.activeTool = ""
-                ToastService.showError(pluginApi.tr("messages.picker-cancelled"))
-                return
-            }
-            var r = parseInt(hex.slice(1, 3), 16)
-            var g = parseInt(hex.slice(3, 5), 16)
-            var b = parseInt(hex.slice(5, 7), 16)
-            var rgb = "rgb(" + r + ", " + g + ", " + b + ")"
-            var rn = r/255, gn = g/255, bn = b/255
-            var max = Math.max(rn,gn,bn), min = Math.min(rn,gn,bn)
-            var d = max - min, hh = 0
-            var sv = (max === 0) ? 0 : d / max
-            var vv = max
-            if (d !== 0) {
-                if      (max === rn) hh = ((gn-bn)/d + 6) % 6
-                else if (max === gn) hh = (bn-rn)/d + 2
-                else                 hh = (rn-gn)/d + 4
-                hh = Math.round(hh * 60)
-            }
-            var hsv = "hsv(" + hh + ", " + Math.round(sv*100) + "%, " + Math.round(vv*100) + "%)"
-            var l  = (max + min) / 2
-            var sl = (d === 0) ? 0 : d / (1 - Math.abs(2*l - 1))
-            var hsl = "hsl(" + hh + ", " + Math.round(sl*100) + "%, " + Math.round(l*100) + "%)"
-            if (pluginApi) {
-                pluginApi.pluginSettings.resultHex = hex
-                pluginApi.pluginSettings.resultRgb = rgb
-                pluginApi.pluginSettings.resultHsv = hsv
-                pluginApi.pluginSettings.resultHsl = hsl
-                pluginApi.pluginSettings.colorCapturePath = capturePath
-                var history = pluginApi.pluginSettings.colorHistory || []
-                history = [hex].concat(history.filter(c => c !== hex)).slice(0, 8)
-                pluginApi.pluginSettings.colorHistory = history
-                pluginApi.saveSettings()
-            }
-            root.activeTool = "colorpicker"
-            if (pluginApi) {
-                pluginApi.pluginSettings.stateActiveTool = "colorpicker"
-                pluginApi.withCurrentScreen(screen => pluginApi.openPanel(screen))
-            }
-        }
-    }
-
-    Process {
-        id: ocrProc
-        stdout: StdioCollector {}
-        onExited: {
-            root.isRunning = false
-            var text = ocrProc.stdout.text.trim()
-            if (text !== "") {
-                if (pluginApi) {
-                    pluginApi.pluginSettings.ocrResult = text
-                    pluginApi.pluginSettings.ocrCapturePath = "/tmp/screen-toolkit-ocr.png"
-                    pluginApi.pluginSettings.translateResult = ""
-                    pluginApi.saveSettings()
-                }
-                root.activeTool = "ocr"
-                if (pluginApi) {
-                    pluginApi.pluginSettings.stateActiveTool = "ocr"
-                    pluginApi.withCurrentScreen(screen => pluginApi.openPanel(screen))
-                }
-            } else {
-                root.activeTool = ""
-                ToastService.showError(pluginApi.tr("messages.no-text"))
-            }
-        }
-    }
-
-    Process {
-        id: qrProc
-        stdout: StdioCollector {}
-        onExited: {
-            root.isRunning = false
-            var result = qrProc.stdout.text.trim()
-            if (result !== "") {
-                if (pluginApi) {
-                    pluginApi.pluginSettings.qrResult = result
-                    pluginApi.pluginSettings.qrCapturePath = "/tmp/screen-toolkit-qr.png"
-                    pluginApi.saveSettings()
-                }
-                root.activeTool = "qr"
-                if (pluginApi) {
-                    pluginApi.pluginSettings.stateActiveTool = "qr"
-                    pluginApi.withCurrentScreen(screen => pluginApi.openPanel(screen))
-                }
-            } else {
-                root.activeTool = ""
-                ToastService.showError(pluginApi.tr("messages.no-qr"))
-            }
-        }
-    }
-
-    Process {
-        id: lensProc
-        onExited: (code) => {
-            root.isRunning = false
-            root.activeTool = ""
-            if (code !== 0) ToastService.showError(pluginApi.tr("messages.lens-failed"))
-        }
-    }
-
     Process {
         id: annotateProc
         onExited: (code) => {
             root.isRunning = false
             if (code === 0) {
                 root.activeTool = ""
-                if (pluginApi) pluginApi.withCurrentScreen(screen => pluginApi.closePanel(screen))
-                var region = annotateRegionProc._pendingRegion
-                Logger.i("ScreenToolkit", "annotate done, region=" + region)
-                annotateOverlay.parseAndShow(region, "/tmp/screen-toolkit-annotate.png")
-                annotateRegionProc._pendingRegion = ""
+                var region = annotateRegionState._pendingRegion
+                var screen = annotateRegionState._pendingScreen
+                annotateRegionState._pendingRegion = ""
+                annotateRegionState._pendingScreen = null
+                if (pluginApi) {
+                    pluginApi.withCurrentScreen(s => {
+                        pluginApi.closePanel(s)
+                        annotateOverlay.parseAndShow(region, "/tmp/screen-toolkit-annotate.png", screen)
+                    })
+                } else {
+                    annotateOverlay.parseAndShow(region, "/tmp/screen-toolkit-annotate.png", screen)
+                }
             } else {
                 root.activeTool = ""
                 ToastService.showError(pluginApi.tr("messages.capture-failed"))
             }
         }
     }
-
-    // annotateRegionProc is kept as a namespace to store the pending region string
-    // so annotateProc.onExited can pass it to annotateOverlay.parseAndShow.
     QtObject {
-        id: annotateRegionProc
+        id: annotateRegionState
         property string _pendingRegion: ""
+        property var    _pendingScreen: null
     }
-
+    Process {
+        id: annotateWinProc
+        stdout: StdioCollector {}
+        onExited: (code) => {
+            root.isRunning = false
+            var geomStr = annotateWinProc.stdout.text.trim()
+            if (code !== 0 || geomStr === "") {
+                root.activeTool = ""
+                ToastService.showError(pluginApi.tr("messages.capture-failed"))
+                return
+            }
+            var parts = geomStr.split(" ")
+            if (parts.length < 2) { root.activeTool = ""; return }
+            var xy = parts[0].split(",")
+            var wh = parts[1].split("x")
+            var gx = parseInt(xy[0]) || 0
+            var gy = parseInt(xy[1]) || 0
+            var gw = parseInt(wh[0]) || 400
+            var gh = parseInt(wh[1]) || 300
+            var screen    = root._findScreenForPoint(gx, gy)
+            var regionStr = (gx - (screen?.x ?? 0)) + "," + (gy - (screen?.y ?? 0)) + " " + gw + "x" + gh
+            root.activeTool = ""
+            if (pluginApi) {
+                pluginApi.withCurrentScreen(s => {
+                    pluginApi.closePanel(s)
+                    annotateOverlay.parseAndShow(regionStr, "/tmp/screen-toolkit-annotate.png", screen)
+                })
+            } else {
+                annotateOverlay.parseAndShow(regionStr, "/tmp/screen-toolkit-annotate.png", screen)
+            }
+        }
+    }
     Process {
         id: pinGrimProc
         stdout: StdioCollector {}
         onExited: (code) => {
             root.isRunning = false
             var output = pinGrimProc.stdout.text.trim()
-            Logger.i("ScreenToolkit", "pinGrimProc exited: code=" + code + " output=" + output)
             if (code === 0 && output !== "") {
                 var parts = output.split("|")
-                Logger.i("ScreenToolkit", "pin parts=" + JSON.stringify(parts))
                 if (parts.length === 2) {
                     var imgPath = parts[0]
-                    var wh = parts[1].split("x")
-                    var pw = parseInt(wh[0]) || 400
-                    var ph = parseInt(wh[1]) || 300
-                    Logger.i("ScreenToolkit", "addPin: " + imgPath + " " + pw + "x" + ph)
-                    pinOverlay.addPin(imgPath, pw, ph)
+                    var wh  = parts[1].split("x")
+                    var pw  = parseInt(wh[0]) || 400
+                    var ph  = parseInt(wh[1]) || 300
+                    pinOverlay.addPin(imgPath, pw, ph, root._regionScreen)
                     ToastService.showNotice(pluginApi.tr("messages.pinned"))
                 }
             } else if (code !== 0) {
@@ -301,242 +405,130 @@ Item {
             }
         }
     }
-
     Process {
-        id: paletteProc
+        id: pinFileProc
         stdout: StdioCollector {}
         onExited: (code) => {
-            root.isRunning = false
-            var raw = paletteProc.stdout.text.trim()
-            if (code === 0 && raw !== "") {
-                var colors = raw.split("\n").filter(function(c) { return c.match(/^#[0-9a-fA-F]{6}$/) }).slice(0, 8)
-                Logger.i("ScreenToolkit", "palette colors: " + JSON.stringify(colors))
-                if (colors.length > 0 && pluginApi) {
-                    pluginApi.pluginSettings.paletteColors = colors
-                    pluginApi.saveSettings()
-                    root.activeTool = "palette"
-                    pluginApi.pluginSettings.stateActiveTool = "palette"
-                    pluginApi.withCurrentScreen(screen => pluginApi.openPanel(screen))
-                }
-            } else {
-                ToastService.showError(pluginApi.tr("messages.palette-failed"))
+            var path = pinFileProc.stdout.text.trim()
+            if (code === 0 && path !== "") {
+                pinOverlay.addPin(path, 600, 400, root._regionScreen)
+                ToastService.showNotice(pluginApi.tr("messages.pinned"))
+            } else if (code === 2) {
+                ToastService.showError(pluginApi.tr("messages.no-file-picker"))
             }
         }
     }
-
-    Process {
-        id: translateProc
-        property bool isTranslating: false
-        stdout: StdioCollector {}
-        onExited: {
-            translateProc.isTranslating = false
-            var result = translateProc.stdout.text.trim()
-            if (pluginApi) {
-                pluginApi.pluginSettings.translateResult = (result !== "")
-                    ? result
-                    : pluginApi.tr("messages.translate-failed")
-                pluginApi.saveSettings()
-            }
-        }
-    }
-
     Process { id: clipProc }
-
-    // ── Overlays ──────────────────────────────────────────────
-
-    // QML region selector — replaces slurp entirely.
-    // Instant (no process spawn), GPU-rendered (ScreencopyView + GLSL shader),
-    // spring-animated selection box, works on all monitors.
-    RegionSelector {
-        id: regionSelector
-
-        onRegionSelected: (x, y, w, h, screen) => {
-            Logger.i("ScreenToolkit", "RegionSelector: region=" + x + "," + y + " " + w + "x" + h)
-            root._regionX = x
-            root._regionY = y
-            root._regionW = w
-            root._regionH = h
-            root._regionScreen = screen
-            _dispatchPendingTool()
-        }
-
-        onCancelled: {
-            Logger.i("ScreenToolkit", "RegionSelector: cancelled")
-            root.isRunning = false
-            root.activeTool = ""
-        }
-    }
-
-    Annotate {
-        id: annotateOverlay
-        mainInstance: root
-    }
-
-
-    Measure {
-        id: measureOverlay
-        mainInstance: root
-    }
-
-    Pin {
-        id: pinOverlay
-        pluginApi: root.pluginApi
-    }
-
-    Record {
-        id: recordOverlay
-        pluginApi: root.pluginApi
-    }
-
-    Mirror {
-        id: mirrorOverlay
-        pluginApi: root.pluginApi
-    }
-
-    readonly property bool mirrorVisible: mirrorOverlay.isVisible
-    onMirrorVisibleChanged: _syncState()
-
-    // ── Timers ────────────────────────────────────────────────
-
-    // Colorpicker uses slurp -p — it speaks Wayland natively so coordinates
-    // are always correct regardless of compositor (Hyprland, Niri, Sway...).
-    // slurp also provides its own live crosshair preview for free.
     Timer {
         id: launchColorPicker
-        interval: 150; repeat: false
-        onTriggered: {
-            var file = "/tmp/screen-toolkit-colorpicker.png"
-            var cmd = "COORDS=$(slurp -p 2>/dev/null) || exit 1"
-                    + "; X=$(echo \"$COORDS\" | cut -d',' -f1)"
-                    + "; Y=$(echo \"$COORDS\" | cut -d',' -f2 | cut -d' ' -f1)"
-                    + "; GX=$((X-5)); GY=$((Y-5))"
-                    + "; grim -g \"${GX},${GY} 11x11\" \"" + file + "\" 2>/dev/null || exit 1"
-                    + "; HEX=$(magick \"" + file + "\" -alpha off -format '#%[hex:p{5,5}]' info:- 2>/dev/null)"
-                    + "; [ -n \"$HEX\" ] && printf '%s|%s' \"$HEX\" \"" + file + "\" || exit 1"
-            colorPickerProc.exec({ command: ["bash", "-c", cmd] })
-        }
+        interval: 220; repeat: false
+        onTriggered: colorPickerOverlay.run()
     }
-
-    // ── Tool launch timers ────────────────────────────────────
-    // Each fires immediately after RegionSelector confirms a region.
-    // No polling needed — region coords are already in root._regionX/Y/W/H.
-
     Timer {
         id: launchOcr
         interval: 50; repeat: false
-        onTriggered: {
-            var file = "/tmp/screen-toolkit-ocr.png"
-            var lang = root.pendingLangStr
-            var cmd = _grimRegionCmd(file)
-                    + "; cat " + file + " | tesseract - - -l " + lang + " 2>/dev/null"
-            ocrProc.exec({ command: ["bash", "-c", cmd] })
-        }
+        onTriggered: ocrOverlay.run(root._grimX, root._grimY, root._grimW, root._grimH, root.pendingLangStr)
     }
-
     Timer {
         id: launchQr
         interval: 50; repeat: false
-        onTriggered: {
-            var file = "/tmp/screen-toolkit-qr.png"
-            var cmd = _grimRegionCmd(file) + "; zbarimg -q --raw " + file + " 2>/dev/null"
-            qrProc.exec({ command: ["bash", "-c", cmd] })
-        }
+        onTriggered: qrOverlay.run(root._grimGeometry)
     }
-
     Timer {
         id: launchLens
         interval: 50; repeat: false
-        onTriggered: {
-            var file = "/tmp/screen-toolkit-lens.png"
-            var cmd = _grimRegionCmd(file)
-                    + " && notify-send 'Screen Toolkit' 'Uploading to Lens...' 2>/dev/null"
-                    + "; URL=$(curl -sS -F 'file=@" + file + "' 'https://0x0.st' 2>/dev/null)"
-                    + "; rm -f " + file
-                    + "; if [ -n \"$URL\" ]; then xdg-open \"https://lens.google.com/uploadbyurl?url=$URL\" 2>/dev/null; else exit 1; fi"
-            lensProc.exec({ command: ["bash", "-c", cmd] })
-        }
+        onTriggered: lensOverlay.run(root._grimX, root._grimY, root._grimW, root._grimH)
     }
-
     Timer {
         id: launchAnnotate
         interval: 50; repeat: false
         onTriggered: {
-            // parseAndShow positions the overlay in screen-local logical pixels
-            var scale = root._regionScreen?.devicePixelRatio ?? 1.0
-            var regionStr = Math.round(root._regionX / scale) + "," +
-                            Math.round(root._regionY / scale) + " " +
-                            Math.round(root._regionW / scale) + "x" +
-                            Math.round(root._regionH / scale)
-            annotateRegionProc._pendingRegion = regionStr
-            annotateProc.exec({ command: ["bash", "-c", _grimRegionCmd("/tmp/screen-toolkit-annotate.png")] })
+            var regionStr = root._grimLocalX + "," + root._grimLocalY + " " + root._grimW + "x" + root._grimH
+            annotateRegionState._pendingRegion = regionStr
+            annotateRegionState._pendingScreen = root._regionScreen
+            annotateProc.exec({ command: ["bash", "-c",
+                "grim -g \"" + root._grimGeometry + "\" /tmp/screen-toolkit-annotate.png 2>/dev/null"
+            ]})
         }
     }
-
+    Timer {
+        id: launchAnnotateActiveWindow
+        interval: 360; repeat: false
+        onTriggered: {
+            annotateWinProc.exec({ command: [root._scriptsDir + "capture.sh", "annotate-window"] })
+        }
+    }
+    Timer {
+        id: launchAnnotateFullscreen
+        interval: 380; repeat: false
+        property var targetScreen: null
+        onTriggered: {
+            var name = targetScreen?.name ?? ""
+            annotateProc.exec({ command: name !== ""
+                ? ["grim", "-o", name, "/tmp/screen-toolkit-annotate.png"]
+                : ["grim", "/tmp/screen-toolkit-annotate.png"]
+            })
+        }
+    }
     Timer {
         id: launchPin
         interval: 50; repeat: false
         onTriggered: {
-            var scale = root._regionScreen?.devicePixelRatio ?? 1.0
-            var sx = root._regionScreen?.x ?? 0
-            var sy = root._regionScreen?.y ?? 0
-            var gx = sx + Math.round(root._regionX / scale)
-            var gy = sy + Math.round(root._regionY / scale)
-            var gw = Math.round(root._regionW / scale)
-            var gh = Math.round(root._regionH / scale)
-            var region = gx + "," + gy + " " + gw + "x" + gh
-            var size   = gw + "x" + gh
-            var cmd = "FILE=/tmp/screen-toolkit-pin-$(date +%s%3N).png"
-                    + "; grim -s 2 -g \"" + region + "\" \"$FILE\" 2>/dev/null || exit 1"
-                    + "; echo \"$FILE|" + size + "\""
-            pinGrimProc.exec({ command: ["bash", "-c", cmd] })
+            pinGrimProc.exec({ command: [root._scriptsDir + "capture.sh", "pin", root._grimGeometry] })
         }
     }
-
+    Timer {
+        id: launchPinFile
+        interval: 200; repeat: false
+        onTriggered: {
+            pinFileProc.exec({ command: [root._scriptsDir + "pick-file.sh"] })
+        }
+    }
     Timer {
         id: launchPalette
         interval: 50; repeat: false
-        onTriggered: {
-            var file = "/tmp/screen-toolkit-palette.png"
-            var args = "-alpha off +dither -colors 8 -unique-colors txt:-"
-            var cmd = _grimRegionCmd(file)
-                    + "; magick " + file + " " + args + " 2>/dev/null | grep -v '^#' | grep -oP '#[0-9a-fA-F]{6}' | head -8"
-            paletteProc.exec({ command: ["bash", "-c", cmd] })
-        }
+        onTriggered: paletteOverlay.run(root._grimGeometry)
     }
-
     Timer {
         id: launchRecord
         interval: 50; repeat: false
         onTriggered: {
-            var scale = root._regionScreen?.devicePixelRatio ?? 1.0
-            var sx = root._regionScreen?.x ?? 0
-            var sy = root._regionScreen?.y ?? 0
-            var region = (sx + Math.round(root._regionX / scale)) + "," +
-                         (sy + Math.round(root._regionY / scale)) + " " +
-                         Math.round(root._regionW / scale) + "x" +
-                         Math.round(root._regionH / scale)
-            // Local coords for UI overlay positioning (no screen offset)
-            var localX = Math.round(root._regionX / scale)
-            var localY = Math.round(root._regionY / scale)
-            root.isRunning = false
+            root.isRunning  = false
             root.activeTool = "record"
-            recordOverlay.startRecording(region, root.pendingRecordFormat, root.pendingRecordAudioOut, root.pendingRecordAudioIn, root.pendingRecordCursor, localX, localY)
+            recordOverlay.startRecording(
+                root._grimGeometry, root.pendingRecordFormat,
+                root.pendingRecordAudioOut, root.pendingRecordAudioIn,
+                root.pendingRecordCursor, root._grimLocalX, root._grimLocalY,
+                root._regionScreen
+            )
         }
     }
-
-    // Shows the RegionSelector after the panel closes
     Timer {
-        id: launchRegionSelector
-        interval: 150; repeat: false
+        id: launchRecordFullscreen
+        interval: 50; repeat: false
         property var targetScreen: null
         onTriggered: {
-            regionSelector.show(targetScreen)
+            var screen = targetScreen ?? Quickshell.screens[0] ?? null
+            if (!screen) return
+            var scale  = screen.devicePixelRatio ?? 1.0
+            var region = screen.x + "," + screen.y + " " +
+                         Math.round(screen.width * scale) + "x" +
+                         Math.round(screen.height * scale)
+            root.isRunning  = false
+            root.activeTool = "record"
+            recordOverlay.startRecording(
+                region, root.pendingRecordFormat,
+                root.pendingRecordAudioOut, root.pendingRecordAudioIn,
+                root.pendingRecordCursor, 0, 0, screen
+            )
         }
     }
-
-    // ── Internal helpers ──────────────────────────────────────
-
-    // Dispatches to the correct tool timer after region is confirmed.
+    Timer {
+        id: launchRegionSelector
+        interval: 220; repeat: false
+        property var targetScreen: null
+        onTriggered: regionSelector.show(targetScreen)
+    }
     function _dispatchPendingTool() {
         switch (root.pendingTool) {
             case "ocr":      launchOcr.start();      break
@@ -551,82 +543,97 @@ Item {
                 root.isRunning = false
         }
     }
-
     function copyToClipboard(text) {
         if (!text || text === "") return
-        clipProc.exec({ command: ["bash", "-c", "printf '%s' " + shellEscape(text) + " | wl-copy 2>/dev/null"] })
+        clipProc.exec({ command: ["bash", "-c",
+            "printf '%s' " + U.shellEscape(text) + " | wl-copy 2>/dev/null"] })
     }
-
-    function shellEscape(str) {
-        return "'" + str.replace(/'/g, "'\\''") + "'"
-    }
-
     function closeThenLaunch(timer) {
         if (!pluginApi) { timer.start(); return }
         pluginApi.withCurrentScreen(screen => {
-            if (timer === launchRegionSelector)
-                launchRegionSelector.targetScreen = screen
+            if (timer === launchRegionSelector) launchRegionSelector.targetScreen = screen
             pluginApi.closePanel(screen)
             timer.start()
         })
     }
-
     function runTranslate(text, targetLang) {
-        if (!text || text === "" || translateProc.isTranslating) return
-        translateProc.isTranslating = true
-        if (pluginApi) {
-            pluginApi.pluginSettings.translateResult = ""
-            pluginApi.saveSettings()
-        }
-        translateProc.exec({ command: ["bash", "-c", "trans -brief -to " + targetLang + " " + shellEscape(text)] })
+        ocrOverlay.runTranslate(text, targetLang)
     }
-
-    // ── Public tool runners ───────────────────────────────────
-    // These keep the same names/signatures as before so Panel.qml and
-    // the IpcHandler below need zero changes.
-
     function runColorPicker() {
         if (root.isRunning) return
-        root.isRunning = true
+        root.isRunning  = true
         root.activeTool = ""
-        if (pluginApi) {
-            pluginApi.pluginSettings.resultHex = ""
-            pluginApi.pluginSettings.resultRgb = ""
-            pluginApi.pluginSettings.resultHsv = ""
-            pluginApi.pluginSettings.resultHsl = ""
-            pluginApi.pluginSettings.colorCapturePath = ""
-            pluginApi.saveSettings()
-        }
-        // slurp -p handles its own UI — no RegionSelector needed
+        colorPickerOverlay.clearResults()
         closeThenLaunch(launchColorPicker)
     }
-
     function runOcr(langStr) {
         if (root.isRunning) return
         root.pendingLangStr = (langStr && langStr !== "") ? langStr : "eng"
         _runSlurpTool("ocr")
     }
-
-    function runQr()      { _runSlurpTool("qr")       }
-    function runLens()    { _runSlurpTool("lens")      }
-    function runAnnotate(){ _runSlurpTool("annotate")  }
+    function runQr()       { _runSlurpTool("qr")      }
+    function runLens()     { _runSlurpTool("lens")     }
+    function runAnnotate() { _runSlurpTool("annotate") }
+    function _findScreenForPoint(gx, gy) {
+        var screens = Quickshell.screens
+        for (var i = 0; i < screens.length; i++) {
+            var s = screens[i]
+            if (gx >= s.x && gx < s.x + s.width && gy >= s.y && gy < s.y + s.height)
+                return s
+        }
+        return root._regionScreen ?? (screens.length > 0 ? screens[0] : null)
+    }
+    function runAnnotateFullscreen() {
+        if (root.isRunning) return
+        root.isRunning = true
+        if (!pluginApi) { launchAnnotateFullscreen.start(); return }
+        pluginApi.withCurrentScreen(screen => {
+            pluginApi.closePanel(screen)
+            root._regionScreen = screen
+            root._regionX = 0; root._regionY = 0
+            root._regionW = Math.round(screen.width  * (screen.devicePixelRatio ?? 1.0))
+            root._regionH = Math.round(screen.height * (screen.devicePixelRatio ?? 1.0))
+            annotateRegionState._pendingRegion = "0,0 " + screen.width + "x" + screen.height
+            annotateRegionState._pendingScreen = screen
+            launchAnnotateFullscreen.targetScreen = screen
+            launchAnnotateFullscreen.start()
+        })
+    }
+    function runAnnotateActiveWindow() {
+        if (root.isRunning) return
+        root.isRunning = true
+        if (!pluginApi) { launchAnnotateActiveWindow.start(); return }
+        pluginApi.withCurrentScreen(screen => {
+            pluginApi.closePanel(screen)
+            root._regionScreen = screen
+            launchAnnotateActiveWindow.start()
+        })
+    }
     function runPalette() {
         if (root.isRunning) return
-        if (pluginApi) {
-            pluginApi.pluginSettings.paletteColors = []
-            pluginApi.saveSettings()
-        }
         _runSlurpTool("palette")
     }
-    function runPin()     { _runSlurpTool("pin")       }
-
+    function runPin() { _runSlurpTool("pin") }
+    function runPinFromFile() {
+        if (!pluginApi) { launchPinFile.start(); return }
+        pluginApi.withCurrentScreen(screen => {
+            pluginApi.closePanel(screen)
+            launchPinFile.start()
+        })
+    }
+    function pinFile(path, screen) {
+        if (!path || path === "") return
+        pinOverlay.addPin(path, 600, 400, screen)
+    }
     function runMeasure() {
         if (root.isRunning) return
         root.activeTool = "measure"
         if (pluginApi) pluginApi.withCurrentScreen(screen => pluginApi.closePanel(screen))
         measureOverlay.show()
     }
-
+    function runRecordStop()    { recordOverlay.stopRecording() }
+    function runRecordSave()    { recordOverlay._saveToFile() }
+    function runRecordDiscard() { recordOverlay.dismiss() }
     function runRecord(format, audioOut, audioIn, cursor) {
         if (root.isRunning || recordOverlay.isRecording || recordOverlay.isConverting) return
         root.pendingRecordFormat   = format   || "gif"
@@ -635,36 +642,83 @@ Item {
         root.pendingRecordCursor   = cursor   === true
         _runSlurpTool("record")
     }
-
+    function runRecordFullscreen(format, audioOut, audioIn, cursor) {
+        if (root.isRunning || recordOverlay.isRecording || recordOverlay.isConverting) return
+        root.pendingRecordFormat   = format   || "gif"
+        root.pendingRecordAudioOut = audioOut === true
+        root.pendingRecordAudioIn  = audioIn  === true
+        root.pendingRecordCursor   = cursor   === true
+        if (!pluginApi) { launchRecordFullscreen.start(); return }
+        pluginApi.withCurrentScreen(screen => {
+            root.isRunning  = true
+            root.activeTool = "record"
+            pluginApi.closePanel(screen)
+            launchRecordFullscreen.targetScreen = screen
+            launchRecordFullscreen.start()
+        })
+    }
     function runMirror() {
-        mirrorOverlay.toggle()
-    }
-
-    function detectCapabilities() {
-        root._detectedLangs = []
-        detectLangsProc.exec({ command: ["bash", "-c", "tesseract --list-langs 2>/dev/null | tail -n +2"] })
-        detectTransProc.exec({ command: ["bash", "-c", "which trans 2>/dev/null"] })
-        detectRecorderProc.exec({ command: ["bash", "-c", "which wl-screenrec 2>/dev/null || which wf-recorder 2>/dev/null"] })
-    }
-
-    // ── IPC ───────────────────────────────────────────────────
-
-    IpcHandler {
-        target: "plugin:screen-toolkit"
-        function colorPicker()  { root.runColorPicker() }
-        function ocr()          { root.runOcr(root.selectedOcrLang) }
-        function qr()           { root.runQr() }
-        function lens()         { root.runLens() }
-        function annotate()     { root.runAnnotate() }
-        function measure()      { root.runMeasure() }
-        function pin()          { root.runPin() }
-        function palette()      { root.runPalette() }
-        function record()       { root.runRecord("gif") }
-        function recordStop()   { if (recordOverlay.isRecording) recordOverlay.stopRecording() }
-        function mirror()       { root.runMirror() }
-        function toggle() {
-            if (!pluginApi) return
-            pluginApi.withCurrentScreen(screen => pluginApi.togglePanel(screen))
+        if (pluginApi) {
+            pluginApi.withCurrentScreen(screen => {
+                pluginApi.closePanel(screen)
+                if (!mirrorOverlay.isVisible) mirrorOverlay.show(screen)
+            })
+        } else {
+            if (!mirrorOverlay.isVisible) mirrorOverlay.show()
         }
     }
+    function runMirrorClose() { mirrorOverlay.hide() }
+    function _runSlurpTool(tool) {
+        if (root.isRunning) return
+        root.pendingTool = tool
+        root.isRunning   = true
+        closeThenLaunch(launchRegionSelector)
+    }
+    function detectCapabilities() {
+        root._detectedLangs = []
+        detectLangsProc.exec({ command:    ["bash", "-c", "tesseract --list-langs 2>/dev/null | tail -n +2"] })
+        detectTransProc.exec({ command:    ["bash", "-c", "which trans 2>/dev/null"] })
+        detectRecorderProc.exec({ command: ["bash", "-c", "which wl-screenrec 2>/dev/null || which wf-recorder 2>/dev/null"] })
+    }
+    function annotateScreenshotCmd(overlayTmpFile) {
+        var dir   = U.screenshotDir(root._home, pluginApi?.pluginSettings?.screenshotPath)
+        var fname = U.buildFilename("annotate", ".png", pluginApi?.pluginSettings?.filenameFormat)
+        var dest  = dir + "/" + fname
+        return "mkdir -p " + U.shellEscape(dir) + " && " +
+               "magick /tmp/screen-toolkit-annotate.png " + U.shellEscape(overlayTmpFile) +
+               " -composite " + U.shellEscape(dest) + " && " +
+               "rm -f " + U.shellEscape(overlayTmpFile) + " && " +
+               "echo " + U.shellEscape(dest)
+    }
+    function annotateScreenshotZoomCmd(imgPath) {
+        var dir   = U.screenshotDir(root._home, pluginApi?.pluginSettings?.screenshotPath)
+        var fname = U.buildFilename("annotate", ".png", pluginApi?.pluginSettings?.filenameFormat)
+        var dest  = dir + "/" + fname
+        return "mkdir -p " + U.shellEscape(dir) + " && " +
+               "cp " + U.shellEscape(imgPath) + " " + U.shellEscape(dest) + " && " +
+               "echo " + U.shellEscape(dest)
+    }
+    IpcHandler {
+        target: "plugin:screen-toolkit"
+        function toggle()              { if (pluginApi) pluginApi.withCurrentScreen(screen => pluginApi.togglePanel(screen)) }
+        function mirror()              { root.runMirror() }
+        function measure()             { root.runMeasure() }
+        function colorPicker()         { root.runColorPicker() }
+        function annotate()            { root.runAnnotate() }
+        function annotateFullscreen()  { root.runAnnotateFullscreen() }
+        function annotateWindow()      { if (root.isHyprland) root.runAnnotateActiveWindow() }
+        function pin()                 { root.runPin() }
+        function pinImage()            { root.runPinFromFile() }
+        function ocr()                 { root.runOcr(pluginApi?.pluginSettings?.selectedOcrLang || "eng") }
+        function qr()                  { root.runQr() }
+        function palette()             { root.runPalette() }
+        function lens()                { root.runLens() }
+        function record()              { root.runRecord("gif") }
+        function recordMp4()           { root.runRecord("mp4") }
+        function recordFullscreen()    { root.runRecordFullscreen("gif") }
+        function recordFullscreenMp4() { root.runRecordFullscreen("mp4") }
+        function recordStop()          { if (recordOverlay.isRecording) recordOverlay.stopRecording() }
+    }
 }
+
+

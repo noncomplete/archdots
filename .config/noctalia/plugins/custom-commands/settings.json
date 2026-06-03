@@ -19,6 +19,11 @@
       "name": "Text Browser",
       "command": "wezterm -e lynx",
       "icon": "world-code"
+    },
+    {
+      "name": "Retro Games",
+      "command": "weterm -e /home/noncomplete/Downloads/RetroArch-Linux-x86_64/RetroArch-Linux-x86_64.AppImage",
+      "icon": "device-gamepad-2"
     }
   ]
 }

@@ -10,13 +10,11 @@ alias :wq="exit"
 alias :x="exit"
 alias tp="/home/noncomplete/.local/share/pipx/venvs/typer-cli-tool/bin/typer"
 alias tt="ttyper -l english1000 -w 30"
-#alias cat="bat"
+alias cat="bat"
 alias ls="eza --color=always --color-scale --icons --all"
 alias ll="eza --color=always --color-scale --icons --long --all"
 alias nnn="nnn -de"
 alias ff="fastfetch"
-#alias zl="zellij -l ~/.config/zellij/layouts/default.kdl"
-#alias zel="zellij"
 
 # Paths
 fish_add_path /home/noncomplete/.local/bin
