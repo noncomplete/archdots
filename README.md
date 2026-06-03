@@ -1,4 +1,4 @@
-# swaydots
+# archdots
 
 Archlinux dotfiles backup
 
