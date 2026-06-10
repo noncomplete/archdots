@@ -5,6 +5,7 @@ end
 # Aliases
 alias vim="nvim"
 alias vi="/usr/bin/vim"
+alias tm="tmux"
 alias :q="exit"
 alias :wq="exit"
 alias :x="exit"
@@ -28,7 +29,7 @@ set -x NNN_PLUG "d:dragdrop;p:preview-tui"
 set -x EDITOR nvim
 set -x NNN_OPTS deH
 set fish_greeting
-set -x SHELL "/usr/bin/fish"
+set -x SHELL /usr/bin/fish
 set -x QT_QPA_PLATFROM wayland
 set -x QT_QPA_PLATFORMTHEME qt5ct
 
@@ -83,19 +84,21 @@ function y
     rm -f -- "$tmp"
 end
 
-
 # >>> conda initialize >>>
 # !! Contents within this block are managed by 'conda init' !!
 if test -f /home/noncomplete/miniconda3/bin/conda
-    eval /home/noncomplete/miniconda3/bin/conda "shell.fish" "hook" $argv | source
+    eval /home/noncomplete/miniconda3/bin/conda "shell.fish" hook $argv | source
 else
     if test -f "/home/noncomplete/miniconda3/etc/fish/conf.d/conda.fish"
         . "/home/noncomplete/miniconda3/etc/fish/conf.d/conda.fish"
     else
-        set -x PATH "/home/noncomplete/miniconda3/bin" $PATH
+        set -x PATH /home/noncomplete/miniconda3/bin $PATH
     end
 end
 # <<< conda initialize <<<
 
 # Prompt
 starship init fish | source
+
+# Greet 
+fastfetch -c term.jsonc

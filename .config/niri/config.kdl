@@ -410,6 +410,12 @@ window-rule {
 		match app-id="org.kiwix.desktop"
 		open-maximized true
 }
+
+window-rule {
+    match app-id="calibre-ebook-viewer"
+    default-column-width { proportion 0.6667; }
+}
+
 // Example: block out two password managers from screen capture.
 // (This example rule is commented out with a "/-" in front.)
 /-window-rule {
@@ -492,7 +498,7 @@ binds {
 		Mod+F2 { spawn "zen-browser"; }
 		Mod+Shift+F2 { spawn "brave-beta"; }
 		Mod+Alt+F2 { spawn-sh "zen-browser --private-window"; }
-		Mod+F3 { spawn "thunar"; }
+		Mod+F3 { spawn "nautilus"; }
 		Mod+F4 { spawn-sh "qs -c noctalia-shell ipc call network togglePanel"; }
 		Mod+F5 { spawn-sh "qs -c noctalia-shell ipc call bluetooth togglePanel"; }
 		Mod+F6 { spawn-sh "qs -c noctalia-shell ipc call launcher emoji"; }
