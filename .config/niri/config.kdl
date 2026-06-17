@@ -270,6 +270,7 @@ layout {
 // See the binds section below for more spawn examples.
 
 spawn-at-startup "qs" "-c" "noctalia-shell"
+spawn-sh-at-startup "wezterm -e /home/noncomplete/.cargo/bin/tuxedo"
 spawn-sh-at-startup "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
 spawn-sh-at-startup "udiskie"
 spawn-sh-at-startup "gsettings set org.gnome.desktop.privacy remember-recent-files 'false'"
@@ -406,6 +407,13 @@ window-rule {
 		open-maximized true
 		opacity 0.85
 }
+
+window-rule {
+		match app-id="ZenNotes"
+		open-maximized true
+		opacity 0.87
+}
+
 window-rule {
 		match app-id="org.kiwix.desktop"
 		open-maximized true
@@ -413,6 +421,11 @@ window-rule {
 
 window-rule {
     match app-id="calibre-ebook-viewer"
+    default-column-width { proportion 0.6667; }
+}
+
+window-rule {
+    match app-id="org.gnome.Nautilus"
     default-column-width { proportion 0.6667; }
 }
 
@@ -442,7 +455,8 @@ window-rule {
 environment {
   QT_QPA_PLATFORM "wayland"
   QT_QPA_PLATFORMTHEME "qt6ct"
-  ELECTRON_OZONE_PLATFORM_HINT "auto"	
+  ELECTRON_OZONE_PLATFORM_HINT "auto"
+  TODO_DIR "/home/noncomplete/Projects/TODO"
 }
 
 // Set the regular wallpaper on the backdrop.

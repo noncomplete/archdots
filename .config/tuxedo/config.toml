@@ -1,0 +1,12 @@
+# tuxedo config
+theme = DarkBlue Transparent
+density = cozy
+sort = due
+show_left = true
+show_right = true
+show_line_num = true
+show_status_bar = true
+show_done = true
+show_future = false
+share_token = 6a068960ba2d10a18d8c413fc3e51aeec07bfa35021125e87379c9354e63c473
+share_port = 46179

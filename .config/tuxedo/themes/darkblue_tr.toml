@@ -1,0 +1,28 @@
+# Dark (blue) Transparent Theme for tuxedo
+# Copy into ${XDG_CONFIG_HOME:-$HOME/.config}/tuxedo/themes/ and press T to select it.
+name = DarkBlue Transparent 
+bg = Reset
+panel = Reset
+border = #201915
+fg = #dfdfdf
+dim = #747474
+accent = #4040a0
+cursor = #202040
+selection = #999999
+statusbar = #282828
+status_fg = #aaaaaa
+mode_fg = #1d2021
+mode_bg = #4040a0
+pri_a = #aaf0f0
+pri_b = #aaafff
+pri_c = #68abab
+pri_d = #83a598
+pri_other = #0096ab
+project = #0033aa
+context = #3099cc
+due = #9fdfdf
+overdue = #0000ff
+today = #0000ff
+done = #548392
+selected = #22383c
+matched = #8ec07c

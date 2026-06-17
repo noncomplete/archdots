@@ -16,6 +16,7 @@ alias ls="eza --color=always --color-scale --icons --all"
 alias ll="eza --color=always --color-scale --icons --long --all"
 alias nnn="nnn -de"
 alias ff="fastfetch"
+alias julia="julia --banner no"
 
 # Paths
 fish_add_path /home/noncomplete/.local/bin
@@ -32,6 +33,7 @@ set fish_greeting
 set -x SHELL /usr/bin/fish
 set -x QT_QPA_PLATFROM wayland
 set -x QT_QPA_PLATFORMTHEME qt5ct
+set -x TODO_DIR /home/noncomplete/Projects/TODO
 
 # Zoxide
 zoxide init fish | source
@@ -99,6 +101,3 @@ end
 
 # Prompt
 starship init fish | source
-
-# Greet 
-fastfetch -c term.jsonc

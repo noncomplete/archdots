@@ -186,9 +186,6 @@
                             "unreadBadgeColor": "primary"
                         },
                         {
-                            "id": "plugin:notes-scratchpad"
-                        },
-                        {
                             "clockColor": "none",
                             "customFont": "",
                             "formatHorizontal": "HH:mm ddd, MMM dd",
@@ -250,7 +247,7 @@
                     "colorizeIcons": false,
                     "hideMode": "hidden",
                     "id": "ActiveWindow",
-                    "maxWidth": 200,
+                    "maxWidth": 145,
                     "scrollingMode": "hover",
                     "showIcon": true,
                     "showText": true,
@@ -368,19 +365,6 @@
                         "workDuration": 25
                     },
                     "id": "plugin:pomodoro"
-                },
-                {
-                    "defaultSettings": {
-                        "cursorPosition": 0,
-                        "filePath": "",
-                        "fontSize": 14,
-                        "panelHeight": 400,
-                        "panelWidth": 600,
-                        "scratchpadContent": "",
-                        "scrollPositionX": 0,
-                        "scrollPositionY": 0
-                    },
-                    "id": "plugin:notes-scratchpad"
                 },
                 {
                     "clockColor": "none",
@@ -560,7 +544,7 @@
     "desktopWidgets": {
         "enabled": true,
         "gridSnap": true,
-        "gridSnapScale": true,
+        "gridSnapScale": false,
         "monitorWidgets": [
             {
                 "name": "eDP-1",

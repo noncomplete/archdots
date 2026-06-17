@@ -7,7 +7,17 @@
 
 alias ls='ls --color=auto'
 alias grep='grep --color=auto'
-PS1='[\u@\h \W]\$ '
+alias :q="exit"
+alias :wq="exit"
+alias :x="exit"
+
+# Vars and Paths
+export PATH=$PATH:/home/noncomplete/.local/bin:/home/noncomplete/.juliaup/bin:/home/noncomplete/.cargo/bin
+export EDITOR=nvim
+export NNN_OPTS=deH
+export QT_QPA_PLATFROM=wayland
+export QT_QPA_PLATFORMTHEME=qt5ct
+export TODO_DIR=/home/noncomplete/Projects/TODO
 
 # >>> conda initialize >>>
 # !! Contents within this block are managed by 'conda init' !!
@@ -28,4 +38,5 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"                   # This loads nvm
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion" # This loads nvm bash_completion
 
-fastfetch -c term.jsonc
+eval "$(zoxide init bash)"
+eval "$(starship init bash)"
